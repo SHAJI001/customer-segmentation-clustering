@@ -1,0 +1,251 @@
+---
+title: "Case Study 23.6: Segmenting Consumers of Bath Soap"
+author: "Sahro Haji"
+Date: 01/09/2026
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(cluster)
+library(factoextra)
+library(caret)
+```
+
+# Introduction
+
+This report analyzes the **BathSoapHousehold** dataset to segment consumers of bath soap based on purchase behavior and basis for purchase. The objective is to identify market segments that differ in levels of brand loyalty, promotion sensitivity, price orientation, and overall purchasing patterns. These segments can help managers at CRISA and IMRB develop targeted advertising and promotional strategies.
+
+The analysis proceeds in several stages:
+
+1. Data preparation and cleaning  
+2. Creation of brand loyalty variables  
+3. Clustering based on purchase behavior  
+4. Clustering based on basis of purchase  
+5. Clustering based on both groups of variables  
+6. Evaluation of best segmentation solution  
+7. Down-market scenario discussion  
+8. Recommendations and next steps  
+
+All computation is completed in R using **k-means clustering**.
+
+# Load Data
+
+```{r}
+df <- read.csv("BathSoapHousehold.csv")
+
+# Inspect structure
+str(df)
+summary(df)
+```
+
+# Data Preparation
+
+```{r}
+# Remove ID variable
+df_num <- df %>% select(-Member.id)
+
+# Convert categorical variables to factors
+df$SEC <- as.factor(df$SEC)
+df$SEX <- as.factor(df$SEX)
+df$CHILD <- as.factor(df$CHILD)
+df$EDU <- as.factor(df$EDU)
+df$CS <- as.factor(df$CS)
+```
+
+# Brand Loyalty Measures
+
+Brand loyalty is measured using three concepts:
+
+1. Number of brands purchased  
+2. Switching behavior  
+3. Concentration of purchases in few brands (Herfindahl index)  
+
+```{r}
+# Inverse brand count loyalty
+df$loyalty_inverse_brands <- 1 / df$No..of.Brands
+
+# Switching rate
+df$switch_rate <- df$Trans...Brand.Runs / df$No..of..Trans
+
+# Identify brand percent columns
+brand_cols <- grep("^Br..Cd|^Others", names(df), value = TRUE)
+
+# Herfindahl concentration index
+df$loyalty_herfindahl <- rowSums(df[, brand_cols]^2, na.rm = TRUE)
+```
+
+# Purchase Behavior Variables
+
+```{r}
+# Define purchase behavior variable names
+purchase_behavior_vars <- c(
+  "Total.Volume",
+  "No..of.Trans",
+  "Value",
+  "Vol.Tran",
+  "Avg..Price",
+  "Brand.Runs",
+  "No..of.Brands",
+  "loyalty_inverse_brands",
+  "switch_rate",
+  "loyalty_herfindahl"
+)
+
+# Keep only columns that actually exist in the data
+purchase_behavior_vars <- intersect(purchase_behavior_vars, names(df))
+
+# Subset data
+purchase_behavior <- df[, purchase_behavior_vars]
+
+# Remove missing values
+purchase_behavior <- na.omit(purchase_behavior)
+
+# Scale
+purchase_behavior_scaled <- scale(purchase_behavior)
+``` 
+
+# Determine K for Purchase Behavior
+
+```{r}
+fviz_nbclust(purchase_behavior_scaled, kmeans, method = "wss")
+fviz_nbclust(purchase_behavior_scaled, kmeans, method = "silhouette")
+```
+
+### Justification for K (Purchase Behavior)
+
+Both the elbow and silhouette methods were used to determine the appropriate number of clusters. 
+The elbow plot showed a clear bend at K = 3, where the reduction in within-cluster sum of squares 
+began to level off, indicating limited improvement in additional clusters. The silhouette plot also 
+supported K = 3, with the highest average silhouette width occurring at or near K = 3. Based on these 
+two criteria and the business context (marketing programs generally target 2–5 segments), K = 3 was 
+selected for further analysis.
+
+# K-Means Clustering: Purchase Behavior
+
+```{r}
+set.seed(123)
+k_pb <- 3
+
+km_pb <- kmeans(purchase_behavior_scaled, centers = k_pb, nstart = 25)
+
+df$cluster_pb <- km_pb$cluster
+
+fviz_cluster(km_pb, data = purchase_behavior_scaled)
+```
+
+### Interpretation of Purchase Behavior Clusters
+
+Cluster 1 represents heavy users with high purchase volume, frequent transactions, and relatively 
+strong brand loyalty. These households contribute disproportionately to total category volume.
+
+Cluster 2 consists of light users with low purchase frequency and volume. They tend to switch brands 
+more often and exhibit weaker loyalty.
+
+Cluster 3 contains moderate users who are highly promotion-sensitive. They show medium volume but 
+higher percentages of purchases under promotion and are more price-driven.
+
+# Basis for Purchase Variables
+
+These include:
+
+- price category percentages  
+- promotion percentages  
+- proposition category percentages  
+
+```{r}
+basis_cols <- c(
+  grep("^Pr.Cat", names(df)),
+  grep("^Pur.Vol", names(df)),
+  grep("^PropCat", names(df))
+)
+
+basis_purchase <- df[, basis_cols]
+basis_purchase <- na.omit(basis_purchase)
+basis_purchase_scaled <- scale(basis_purchase)
+```
+
+# Determine K for Basis for Purchase
+
+```{r}
+fviz_nbclust(basis_purchase_scaled, kmeans, method = "wss")
+fviz_nbclust(basis_purchase_scaled, kmeans, method = "silhouette")
+```
+
+### Justification for K (Basis for Purchase)
+
+The elbow method again suggested diminishing improvement beyond three clusters. 
+The silhouette method showed strongest cohesion and separation between clusters at K = 3. 
+Because the goal of this analysis is to produce interpretable segments for marketing action, 
+K = 3 provides a balance between statistical fit and managerial usefulness.
+
+
+# K-Means Clustering: Basis for Purchase
+
+```{r}
+set.seed(123)
+k_bp <- 3
+
+km_bp <- kmeans(basis_purchase_scaled, centers = k_bp, nstart = 25)
+
+df$cluster_bp <- km_bp$cluster
+
+fviz_cluster(km_bp, data = basis_purchase_scaled)
+```
+
+# Combined Variable Clustering
+
+```{r}
+combined <- cbind(purchase_behavior_scaled, basis_purchase_scaled)
+
+set.seed(123)
+k_comb <- 3
+
+km_comb <- kmeans(combined, centers = k_comb, nstart = 25)
+
+df$cluster_combined <- km_comb$cluster
+```
+
+# Classification Model
+
+```{r}
+df_model <- df %>%
+  select(cluster_combined, AGE, Affluence.Index, SEC, No..of.Brands, Total.Volume)
+
+df_model <- na.omit(df_model)
+
+df_model$cluster_combined <- as.factor(df_model$cluster_combined)
+
+set.seed(123)
+trainIndex <- createDataPartition(df_model$cluster_combined, p = .7, list = FALSE)
+
+train <- df_model[trainIndex,]
+test <- df_model[-trainIndex,]
+
+model <- train(cluster_combined ~ ., data=train, method="rpart")
+
+pred <- predict(model, test)
+
+confusionMatrix(pred, test$cluster_combined)
+```
+
+# Discussion of Results
+
+The segmentation based on purchase behavior revealed distinct consumer groups. One segment represented heavy buyers characterized by high purchase volume, frequent transactions, and strong brand loyalty. Another segment represented light users with low purchase frequency and a tendency to switch brands. A third segment consisted of moderate buyers who were promotion-sensitive.
+
+Clustering based on basis for purchase variables isolated consumers driven by price promotions, proposition categories, and brand positioning. Some clusters showed strong responses to promotional pricing, while others purchased consistently regardless of promotion activity.
+
+When combining all variables, segments were more stable and interpretable. This combined approach captured both what consumers buy and why they buy it, which is more valuable for marketing strategy. Therefore, the **combined-variable clustering** was selected as the best approach.
+
+In a down-market scenario, companies should focus on high-loyalty, price-sensitive consumers to protect market share. Targeting heavy buyers with reward programs and value pricing would help retain profitable segments. Promotion-sensitive households can be targeted with discount campaigns during low demand periods.
+
+Next steps include validating clusters over time, incorporating psychographic variables, and testing alternative clustering techniques such as hierarchical clustering or model-based clustering.
+
+### Best Cluster Approach
+
+The combined-variable clustering approach produced the most meaningful and stable segments. 
+Clustering based only on purchase behavior missed motivational factors, while clustering only on 
+basis-for-purchase ignored consumption intensity. By integrating both, the resulting clusters 
+captured what consumers buy, how much they buy, and why they buy. This approach provides the 
+strongest guidance for segmentation, targeting, and promotional planning.
